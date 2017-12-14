@@ -41,6 +41,7 @@ p <- data_team %>%
   geom_text_repel(aes(label=Tm.x), size=2.5, direction = "y", point.padding=0.1)+
   xlab("Adjusted Defensive Rating")+
   ylab("Adjusted Offensive Rating")
+p
 
 pdf(file = "Documents/NBA_TeamAge_plot.pdf")
 p
@@ -68,6 +69,7 @@ p <- data_team %>%
   geom_text_repel(aes(label=Tm.x), size=2.5, direction = "y", point.padding=0.1)+
   xlab("Adjusted Defensive Rating")+
   ylab("Adjusted Offensive Rating")
+p
 
 pdf(file = "Documents/NBA_TeamVORP_plot.pdf")
 p
@@ -164,3 +166,35 @@ p
 dev.off()
 
 # not that different I guess, let's try looking at cumulative MINUTES against minutes rank
+
+
+## gonna look at TOV
+
+team_TOV <- data %>%
+  group_by(Tm.x) %>% 
+  summarise(TotalTOV=sum(TOV))
+team_TOV <- arrange(team_TOV,Tm.x)
+team_TOV <- team_TOV[!team_TOV$Tm.x == 'TOT',]
+
+# read in the team-level stats
+team <- read_csv("Documents/nba_team_stats_12_13_17.csv")
+team <- as_tibble(team)
+team <- arrange(team,Team)
+team <- team[c(1:3,5,4,6:nrow(team)),]
+
+# put all the team stuff together
+data_team <- bind_cols(team,team_TOV)
+
+# plotting Offensive and Defensive Rating
+p <- data_team %>% 
+  ggplot(aes(y=`ORtg/A`,x=`DRtg/A`,text=TotalTOV))+
+  scale_x_reverse()+
+  geom_point(aes(color=TotalTOV), size=3)+
+  scale_colour_gradient2(low="dark green", mid="khaki1",
+                         high="red", midpoint=mean(data_team$TotalTOV))+
+  theme_tufte()+
+  theme(text=element_text(family="sans", colour="black"), legend.position=c(0.92,0.75), legend.key.size=unit(0.4,"cm"), legend.background=element_rect(color="black", size=0.2))+
+  geom_text_repel(aes(label=Tm.x), size=2.5, direction = "y", point.padding=0.1)+
+  xlab("Adjusted Defensive Rating")+
+  ylab("Adjusted Offensive Rating")
+p
