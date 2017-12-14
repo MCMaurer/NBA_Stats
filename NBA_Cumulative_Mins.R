@@ -2,8 +2,8 @@ require(tidyverse)
 require(ggrepel)
 require(ggthemes)
 # read in regular and advanced stats csv files, then join them and get rid of redundancy
-data <- read.csv("Documents/nba_player_stats_12_13_17.csv",header=T)
-data2 <- read.csv("Documents//nba_advanced_stats_12_13_17.csv",header=T)
+data <- read.csv("GitHub/NBA_Stats/nba_player_stats_12_13_17.csv",header=T)
+data2 <- read.csv("GitHub/NBA_Stats/nba_advanced_stats_12_13_17.csv",header=T)
 data <- full_join(data,data2,by="Player")
 data2 <- NULL
 data$X <- NULL
@@ -36,6 +36,6 @@ p <- d3 %>%
   ylab("Cumulative Percentage of Team Mins")+
   scale_colour_manual(values=c("#E03A3E", "#008248", "black", "#CE1141", "#1D1160", "#6F2633", "#007DC5", "#5091CD", "#ED174C", "#243E90", "#CE1141", "#002D62", "#ED174C", "#552583", "#00285E", "#98002E", "#00471B", "#005083", "#002B5C", "#F58426", "#007AC1", "#0B77BD", "#006BB6", "#1D1160", "#E13A3E", "#5A2D81", "#C4CED4", "#CD1141", "#0C2340", "#002B5C"))
 
-pdf(file = "Documents/cumulativeMinutes.pdf")
+pdf(file = "GitHub/NBA_Stats/cumulativeMinutes.pdf")
 p
 dev.off()
