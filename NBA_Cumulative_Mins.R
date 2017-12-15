@@ -90,3 +90,42 @@ p
 pdf(file = "GitHub/NBA_Stats/cumulativeMinutesSingle.pdf")
 p
 dev.off()
+
+# non-cumulative minutes
+
+p <- d3 %>% 
+  mutate(label = ifelse((Tm.x == "MIN"|Tm.x == "IND"|Tm.x == "GSW"|Tm.x == "BRK"|Tm.x == "MIL") & rank == 5, as.character(Tm.x), NA)) %>% 
+  filter(rank <= 20) %>% 
+  ggplot(aes(x=rank, y=MP.x, color=Tm.x, alpha=Tm.x,label=label))+
+  geom_line(size=0.8)+
+  theme_tufte()+
+  theme(legend.position="none", text=element_text(family="sans", colour="black"))+
+  xlab("Within-Team Rank of Players by Mins")+
+  ylab("Minutes Played")+
+  scale_colour_manual(values=color_scheme[,2])+
+  scale_alpha_manual(values=color_scheme[,3])+
+  geom_label_repel(aes(label = label), direction = "both", nudge_x = -1, nudge_y = 0, point.padding = 0.5, na.rm = TRUE)
+p
+
+pdf(file = "GitHub/NBA_Stats/MinutesSingle.pdf")
+p
+dev.off()
+
+# Toronto only
+p <- d3 %>% 
+  #mutate(label = ifelse((Tm.x == "MIN"|Tm.x == "IND"|Tm.x == "GSW"|Tm.x == "BRK"|Tm.x == "MIL") & rank == 5, as.character(Tm.x), NA)) %>% 
+  filter(rank <= 20) %>% 
+  ggplot(aes(x=rank, y=cumulMins, color=Tm.x, alpha=Tm.x))+
+  geom_line(size=0.8)+
+  theme_tufte()+
+  theme(legend.position="none", text=element_text(family="sans", colour="black"))+
+  xlab("Within-Team Rank of Players by Mins")+
+  ylab("Cumulative Percentage of Team Mins")+
+  scale_colour_manual(values=color_scheme[,2])+
+  scale_alpha_manual(values=c(rep(0.1,27),1,0.1,0.1))
+  #geom_label_repel(aes(label = label), direction = "both", nudge_x = -1, nudge_y = 0, point.padding = 0.5, na.rm = TRUE)
+p
+
+pdf(file = "GitHub/NBA_Stats/cumulativeMinutesSingleToronto.pdf")
+p
+dev.off()
