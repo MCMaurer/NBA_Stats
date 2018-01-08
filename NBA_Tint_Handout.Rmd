@@ -1,0 +1,363 @@
+---
+title: "NBA Data Viz"
+subtitle: "Or, I Was Bored Over Break"
+author: "Michael Culshaw-Maurer"
+date: "`r Sys.Date()`"
+output: tint::tintHtml
+bibliography: skeleton.bib
+link-citations: yes
+---
+
+```{r setup, include=FALSE}
+library(tint)
+require(rvest)
+require(tidyverse)
+require(ggrepel)
+require(ggthemes)
+require(zoo)
+require(extrafont)
+require(plotly)
+require(gganimate)
+loadfonts()
+font_import(paths = NULL, recursive = TRUE, prompt = TRUE, pattern = NULL)
+# invalidate cache when the package version changes
+knitr::opts_chunk$set(tidy = FALSE, cache.extra = packageVersion('tint'))
+options(htmltools.dir.version = FALSE)
+```
+
+
+```{r, echo=FALSE, cache=TRUE}
+load_NBA_data <- function(){
+  # this function loads individual and team data from basketball reference, tidies it, and saves it to global env
+url <- 'https://www.basketball-reference.com/leagues/NBA_2018_totals.html'
+css_page <- '#totals_stats'
+player_totals <- url %>% 
+  read_html %>%
+  html_nodes(css_page) %>% 
+  html_table(header = T) %>% 
+  data.frame() %>% 
+  as_tibble() %>% 
+  filter(!Player == "Player") %>% 
+  filter(!Tm == "TOT")
+
+url <- 'https://www.basketball-reference.com/leagues/NBA_2018_advanced.html'
+css_page <- '#advanced_stats'
+player_advanced <- url %>% 
+  read_html %>%
+  html_nodes(css_page) %>% 
+  html_table(header = T) %>% 
+  data.frame() %>% 
+  as_tibble() %>% 
+  filter(!Player == "Player") %>% 
+  filter(!Tm == "TOT")
+
+# combine all player data, delete some junk columns
+player_data <- full_join(player_totals,player_advanced,by="Player")
+player_data$Var.20 <- NULL
+player_data$Var.25 <- NULL
+
+url <- "https://www.basketball-reference.com/leagues/NBA_2018_ratings.html"
+css_page <- "#ratings"
+team_ratings <- url %>% 
+  read_html %>%
+  html_nodes(css_page) %>% 
+  html_table(header = T) %>% 
+  data.frame() %>% 
+  as_tibble() %>% 
+  arrange(Team)
+
+# flip Chicago and Charlotte, then add 3-letter team codes as Tm.x
+team_ratings <- team_ratings[c(1:3,5,4,6:nrow(team_ratings)),]
+Tm.x <- sort(unique(player_data$Tm.x))
+team_ratings <- cbind(team_ratings, Tm.x)
+
+# gotta change lots of data to numeric from characters
+player_cols <- c(1,4,6:31,33,35:56)
+player_data[,player_cols] <- player_data[,player_cols] %>% 
+  lapply(function(x) as.numeric(x))
+
+team_cols <- c(1,5,6:15)
+team_ratings[,team_cols] <- team_ratings[,team_cols] %>% 
+  lapply(function(x) as.numeric(x))
+
+# save the data to global env for use
+player_data <<- player_data
+team_ratings <<- team_ratings
+}
+load_NBA_data()
+highlight_teams <- function(team_list, alpha_others){
+  # this function will take a list of teams and an alpha value (pick a low value), and return a table with all teams, their colors, and low alpha values for all teams not on your list
+  NBA_colors <- c("#E03A3E", "#008248", "black", "#CE1141", "#1D1160", "#6F2633", "#007DC5", "#5091CD", "#ED174C", "#FFCD34", "#CE1141", "#002D62", "#ED174C", "#552583", "#00285E", "#98002E", "#00471B", "#7AC143", "#002B5C", "#F58426", "#007AC1", "#0B77BD", "#006BB6", "#1D1160", "#E13A3E", "#5A2D81", "#C4CED4", "#CD1141", "#0C2340", "#002B5C")
+  alpha_values <- rep(alpha_others,30)
+  team_names <- c("ATL", "BOS", "BRK", "CHI", "CHO", "CLE", "DAL", "DEN", "DET", "GSW", "HOU", "IND", "LAC", "LAL", "MEM", "MIA", "MIL", "MIN", "NOP", "NYK", "OKC", "ORL", "PHI", "PHO", "POR", "SAC", "SAS", "TOR", "UTA", "WAS")
+  
+  color_scheme <- as_tibble(cbind(team_names,NBA_colors,alpha_values))
+  color_scheme$alpha_values <- as.numeric(color_scheme$alpha_values)
+  color_scheme[color_scheme$team_names %in% team_list,3] <- 1
+  color_scheme <- as_tibble(color_scheme)
+  return(color_scheme)
+}
+label_teams <- function(data, team_list, selector_variable, sel_var_value){
+  # this function takes an NBA data frame (data), a team list, the value you'll be using for the x-axis on your plot (in the form data$column), and where along that x-axis the label should fall (sel_var_value). It'll then create labels for each team
+  data_new <- data %>% 
+    mutate(label = ifelse((Tm.x %in% team_list & selector_variable == sel_var_value), as.character(Tm.x), NA))
+  return(data_new)
+}
+```
+
+
+# Introduction
+
+It's hard to keep up with data analysis, data viz, and coding skills in a consistent way in grad school, since you often have long bouts without any data that needs working with. There are plenty of accessible data sets to play around with, but it's more fun to use living, breathing data like sports stats. I decided to do some playing around with data from [Basketball Reference](https://basketballreference.com), which would also give me a chance to work on web-scraping. I'll walk through a number of relationships I wanted to examine and include a little bit of methodology on how I got there^[Check my [**Github repo**](https://github.com/MCMaurer/NBA_Stats) for all my scripts from this project].
+
+# The Thibodeau Grinder
+
+```{marginfigure}
+![thibs](https://media1.giphy.com/media/bcAX66WTkZMyc/giphy-downsized.gif?cid=e1bb72ff5a4e762b32546d592ed2a164)<br>
+```
+
+As a native Minnesotan, I'm required to be a Wolves fan, though I fully understand the inevitable heartache and loss that Minnesota sports will bring me. A prominent narrative surrounding the Wolves this year has been the heavy minutes laid on their top 5 and the toll it's been taking on the players. Just looking at minutes played this season, 3 of the top 5 players are from Minnesota.
+
+```{r plot, fig.margin=T, echo=F}
+table <- player_data %>% 
+  arrange(desc(MP.x)) %>% 
+  select(c(Player,MP.x)) %>% 
+  head() %>% 
+  knitr::kable(col.names = c("Player", "Minutes"))
+table
+```
+
+However, I wanted to look a little deeper at how teams distribute minutes among their top players and their bench. I decided to use cumulative distribution plots to see how teams use their top players and bench. You can use them to look at things like "what % of a team's minutes do their top 5 play?".
+
+Here's an interactive plot^[I used [plotly's](https://plot.ly/) `ggplotly()` function to put this together.] of all NBA teams. Mouse over a line to see the team name and data for that particular point, or click on teams in the legend to remove them from the plot. If you double click on a team in the legend, it'll show only that team. You can then re-add teams if you want to compare a few.
+
+```{r, echo=F}
+d2 <- player_data %>%
+  group_by(Tm.x) %>% 
+  mutate(teamMP=sum(MP.x)) %>% 
+  mutate(percentMins=(MP.x/teamMP)*100) %>% 
+  ungroup()
+
+d3 <- select(d2, Player, Tm.x, percentMins, MP.x)
+
+d4 <- d3 %>% 
+  group_by(Tm.x) %>% 
+  mutate(rank=rank(desc(percentMins), ties.method = "random")) %>% 
+  arrange(rank) %>% 
+  mutate(cumulMins=cumsum(percentMins)) %>% 
+  ungroup()
+```
+
+
+```{r, echo=F}
+team_list <- c()
+color_scheme <- highlight_teams(team_list = team_list, 1)
+d4 <- label_teams(data=d4, team_list = team_list, selector_variable = d4$rank, sel_var_value = 5)
+```
+
+
+```{r, echo=F}
+p <- d4 %>% 
+  filter(rank <= 20) %>% 
+  ggplot(aes(x=rank, y=cumulMins, color=Tm.x, group=1, text=paste('Team: ', Tm.x,
+                      '</br></br> Top', rank,'Players',
+                      '</br>', round(cumulMins,1),"% of Team's Minutes")))+
+  geom_line(size=0.8)+
+  theme_tufte()+
+  theme(legend.position="right", panel.grid = element_blank(), legend.title=element_blank(), text=element_text(family="Roboto Condensed", colour="black"))+
+  xlab("Within-Team Rank of Players by Mins")+
+  ylab("Cumulative Percentage of Team Mins")+
+  scale_colour_manual(values=color_scheme$NBA_colors)
+```
+
+```{r, echo=F, fig.fullwidth=T, fig.width=10, fig.height=6}
+ggplotly(p, session="knitr", tooltip = "text")
+```
+<br>
+<br>
+<br>
+
+```{r, echo=F}
+team_list <- c("MIN", "BRK")
+color_scheme <- highlight_teams(team_list = team_list, 0.05)
+d4 <- label_teams(data=d4, team_list = team_list, selector_variable = d4$rank, sel_var_value = 5)
+
+p <- d4 %>% 
+  filter(rank <= 20) %>% 
+  ggplot(aes(x=rank, y=cumulMins, color=Tm.x, alpha=Tm.x,label=label))+
+  geom_line(size=1.2)+
+  theme_tufte()+
+  theme(axis.line=element_blank(),
+      axis.text.x=element_blank(),
+      axis.text.y=element_blank(),
+      axis.ticks=element_blank(),
+      axis.title.x=element_blank(),
+      axis.title.y=element_blank(),
+      legend.position="none",
+      panel.background=element_blank(),
+      panel.border=element_blank(),
+      panel.grid.major=element_blank(),
+      panel.grid.minor=element_blank(),
+      plot.background=element_blank(),
+      text=element_text(family="Roboto Condensed", colour="black", size=20))+
+  xlab("Within-Team Rank of Players by Mins")+
+  ylab("Cumulative Percentage of Team Mins")+
+  scale_colour_manual(values=color_scheme$NBA_colors)+
+  scale_alpha_manual(values=color_scheme$alpha_values)
+  # geom_label_repel(aes(label = label), direction = "both", nudge_x = -1, nudge_y = 0, point.padding = 0.5, na.rm = TRUE)
+```
+
+```{r, echo=F, fig.margin=T, fig.width=6, fig.height=4, fig.cap="The Wolves and Nets are two extremes in distribution of minutes.", warning=FALSE}
+p
+```
+Comparing the extremes across the NBA, Minnesota and Brooklyn drastically differ in their distributions of playing time. The slope for MIN rises very quickly, with nearly 70% of the team's minutes coming from their top 5. The line ends with a short, flat tail, since they've only played 13 guys all season and most of those deep bench guys are getting only a few % of the team's minutes.
+
+BRK is the opposite, with their top 5 making up  50% of their total minutes and a full 20 guys getting minutes this season. Not only do the Nets use their bench, but the relatively steep slope all the way through to the end of the bench indicates that these guys are getting fairly significant minutes.
+<br>
+<br>
+
+## What About the Pacers?
+
+I noticed there was one team that wasn't too far off from the Wolves in several aspects of their distributions.
+<br>
+```{r, echo=F}
+team_list <- c("MIN", "BRK", "GSW", "IND")
+color_scheme <- highlight_teams(team_list = team_list, 0.05)
+d4 <- label_teams(data=d4, team_list = team_list, selector_variable = d4$rank, sel_var_value = 5)
+
+p <- d4 %>% 
+  filter(rank <= 20) %>% 
+  ggplot(aes(x=rank, y=cumulMins, color=Tm.x, alpha=Tm.x,label=label))+
+  geom_line(size=0.8)+
+  theme_tufte()+
+  theme(legend.position="none", text=element_text(family="Roboto Condensed", colour="black", size=20))+
+  xlab("Within-Team Rank of Players by Mins")+
+  ylab("Cumulative Percentage of Team Mins")+
+  scale_colour_manual(values=color_scheme$NBA_colors)+
+  scale_alpha_manual(values=color_scheme$alpha_values)+
+  geom_label_repel(aes(label = label), direction = "both", nudge_x = -1, nudge_y = 0, point.padding = 0.5, na.rm = TRUE)
+```
+
+```{r, echo=F, fig.width=10, fig.height=6, warning=FALSE, }
+p
+```
+
+Now, I haven't seen any discussion of the Pacers as another small-rotation team, but the Pacers actually match the Wolves if you look at the contributions by their top 8 guys. The Pacers are certainly distributing minutes more evenly among these guys, but they're still well above most of the league at this point.
+<br>
+<br>
+
+```{r, echo=F, warning=F}
+team_list <- c()
+color_scheme <- highlight_teams(team_list = team_list, 1)
+d4 <- label_teams(data=d4, team_list = team_list, selector_variable = d4$rank, sel_var_value = 5)
+
+p <- d4 %>% 
+  filter(rank <= 20) %>% 
+  ggplot(aes(x=rank, y=cumulMins, color=Tm.x, alpha=Tm.x,label=label))+
+  geom_line(aes(frame=Tm.x),size=0.8)+
+  theme_tufte()+
+  theme(legend.position="none", text=element_text(family="Roboto Condensed", colour="black", size=20))+
+  xlab("Within-Team Rank of Players by Mins")+
+  ylab("Cumulative Percentage of Team Mins")+
+  scale_colour_manual(values=color_scheme$NBA_colors)+
+  scale_alpha_manual(values=color_scheme$alpha_values)
+```
+
+```{r, fig.show="animate", echo=F, fig.width=10, fig.height=6, warning=FALSE, cache=T, error=F, comment=F}
+gganimate(p)
+```
+
+## Who Cares About the Regular Season?
+
+Let's take a look at the top 3 teams from each division.
+
+```{r, echo=F}
+team_list <- team_ratings %>% 
+  group_by(Conf) %>% 
+  arrange(desc(W.L.)) %>% 
+  mutate(rank = rank(-W.L., ties.method = "random")) %>% 
+  ungroup() %>% 
+  filter(rank <= 3) %>% 
+  select(Tm.x) %>% 
+  as_vector()
+
+color_scheme <- highlight_teams(team_list = team_list, 0.05)
+d4 <- label_teams(data=d4, team_list = team_list, selector_variable = d4$rank, sel_var_value = 5)
+
+p <- d4 %>% 
+  filter(rank <= 20) %>% 
+  ggplot(aes(x=rank, y=cumulMins, color=Tm.x, alpha=Tm.x,label=label))+
+  geom_line(size=0.8)+
+  theme_tufte()+
+  theme(legend.position="none", text=element_text(family="Roboto Condensed", colour="black", size=20))+
+  xlab("Within-Team Rank of Players by Mins")+
+  ylab("Cumulative Percentage of Team Mins")+
+  scale_colour_manual(values=color_scheme$NBA_colors)+
+  scale_alpha_manual(values=color_scheme$alpha_values)+
+  geom_label_repel(aes(label = label), direction = "both", nudge_x = -1, nudge_y = 0, point.padding = 0.5, na.rm = TRUE)
+```
+
+```{r, echo=F, fig.width=10, fig.height=6, warning=FALSE, }
+p
+```
+<br>
+<br>
+```{r, echo=F, warning=F}
+team_list <- c("MIN", "IND", "HOU")
+color_scheme <- highlight_teams(team_list = team_list, 0.05)
+d4 <- label_teams(data=d4, team_list = team_list, selector_variable = d4$rank, sel_var_value = 5)
+
+d4$animate <- NA
+d4$animate[!d4$Tm.x %in% team_list] <- 1
+d4$animate[d4$Tm.x == "MIN"] <- 2
+d4$animate[d4$Tm.x == "IND"] <- 3
+d4$animate[d4$Tm.x == "HOU"] <- 4
+
+p <- d4 %>% 
+  filter(rank <= 20) %>% 
+  ggplot(aes(x=rank, y=cumulMins, color=Tm.x, alpha=Tm.x))+
+  geom_line(aes(frame=animate,cumulative=TRUE),size=1.2)+
+  theme_tufte()+
+  theme(axis.line=element_blank(),
+      axis.text.x=element_blank(),
+      axis.text.y=element_blank(),
+      axis.ticks=element_blank(),
+      axis.title.x=element_blank(),
+      axis.title.y=element_blank(),
+      legend.position="none",
+      panel.background=element_blank(),
+      panel.border=element_blank(),
+      panel.grid.major=element_blank(),
+      panel.grid.minor=element_blank(),
+      plot.background=element_blank(),
+      text=element_text(family="Roboto Condensed", colour="black", size=20))+
+  scale_colour_manual(values=color_scheme$NBA_colors)+
+  scale_alpha_manual(values=color_scheme$alpha_values)
+
+gganimate(p, title_frame = F, filename = "Houston_comparison.gif")
+```
+
+```{marginfigure}
+![Houston_comparison](Houston_comparison.gif)<br>
+```
+<br>
+<br>
+<br>
+We all know Golden State doesn't care about the regular season and it shows here. They get significant contributions from a bunch of bench guys while their starters play fairly typical minutes. The Spurs play their starters even less and have a pretty significant bench to boot.
+
+```{marginfigure}
+![james+harden](https://media2.giphy.com/media/XPMCrKFznOBQk/giphy-downsized.gif?cid=e1bb72ff5a4e74312e6b63634d3f696b)<br>
+```
+
+On the other end, Houston is actually among the top few teams in the NBA in the load on their starters. They're not all that far off from Minnesota or Indiana. I think the narrative is usually that the Spurs/Warriors model lends itself to playoff success, and combining that with Houston's past playoff flops makes me wonder whether the Rockets' streak can continue through the postseason (but come on, they're just so good).
+
+# Is Pop a Genius?
+
+Yeah.
+
+But let's dig into a more specific question that often comes up regarding the Spurs: does a stable roster correlate with team success?
+
+# **Should add a gif plot somewhere in here, maybe changes in a team through the years, something like that?**
+
+
+

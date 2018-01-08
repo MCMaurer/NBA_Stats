@@ -1,0 +1,14 @@
+base
+tufte
+ggplot2
+xml2
+rvest
+tidyverse
+tibble
+tidyr
+readr
+purrr
+dplyr
+ggrepel
+ggthemes
+zoo
