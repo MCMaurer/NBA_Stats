@@ -1,0 +1,182 @@
+---
+title: "NBA Roster Continuity"
+author: "Michael Culshaw-Maurer"
+date: "2/26/2018"
+output: html_document
+---
+
+```{r, echo=F}
+require(rvest)
+require(tidyverse)
+require(ggrepel)
+require(ggthemes)
+require(zoo)
+require(skimr)
+```
+
+```{r}
+url <- 'https://www.basketball-reference.com/friv/continuity.html'
+css_page <- '#continuity'
+continuity <- url %>%
+  read_html %>%
+  html_nodes(css_page) %>%
+  html_table(header = T, fill = T) %>%
+  data.frame() %>%
+  as_tibble()
+
+highlight_teams <- function(team_list, alpha_others){
+  # this function will take a list of teams and an alpha value (pick a low value), and return a table with all teams, their colors, and low alpha values for all teams not on your list
+  NBA_colors <- c("#E03A3E", "#008248", "black", "#CE1141", "#1D1160", "#6F2633", "#007DC5", "#5091CD", "#ED174C", "#FFCD34", "#CE1141", "#002D62", "#ED174C", "#552583", "#00285E", "#98002E", "#00471B", "#7AC143", "#002B5C", "#F58426", "#007AC1", "#0B77BD", "#006BB6", "#1D1160", "#E13A3E", "#5A2D81", "#C4CED4", "#CD1141", "#0C2340", "#002B5C")
+  alpha_values <- rep(alpha_others,30)
+  team_names <- c("ATL", "BOS", "BRK", "CHI", "CHO", "CLE", "DAL", "DEN", "DET", "GSW", "HOU", "IND", "LAC", "LAL", "MEM", "MIA", "MIL", "MIN", "NOP", "NYK", "OKC", "ORL", "PHI", "PHO", "POR", "SAC", "SAS", "TOR", "UTA", "WAS")
+  
+  color_scheme <- as_tibble(cbind(team_names,NBA_colors,alpha_values))
+  color_scheme$alpha_values <- as.numeric(color_scheme$alpha_values)
+  color_scheme[color_scheme$team_names %in% team_list,3] <- 1
+  color_scheme <- as_tibble(color_scheme)
+  return(color_scheme)
+}
+
+team_list <- c()
+
+color_scheme <- highlight_teams(team_list = team_list, 1)
+```
+
+```{r}
+continuity2 <- continuity
+continuity2[,-1] <- as.numeric(gsub("\\%","",as.matrix(continuity2[,-1])))
+continuity3 <- gather(continuity2, "team", "continuity", 2:31)
+```
+
+
+```{r}
+ratings <- read_csv("AllYearsTeamRatings.csv")
+team_names <- read_csv("team_names_abbreviations.csv")
+```
+
+Basically I'm creating a key-pair combo with the team names and abbreviations, then give the abbreviations to a bigger data frame that only has the actual team name
+```{r}
+ratings$Tm.x <- team_names$Tm.x[match(ratings$Team, team_names$Team)]
+```
+
+```{r}
+ratings[ratings$Team == "New Jersey Nets", 17] <- "BRK"
+ratings[ratings$Team == "New Orleans Hornets", 17] <- "NOP"
+ratings[ratings$Team == "Charlotte Bobcats", 17] <- "CHO"
+ratings[ratings$Team == "Seattle SuperSonics", 17] <- "OKC"
+ratings[ratings$Team == "Washington Bullets", 17] <- "WAS"
+ratings[ratings$Team == "Vancouver Grizzlies", 17] <- "MEM"
+ratings[ratings$Team == "New Orleans/Oklahoma City Hornets", 17] <- "NOP"
+
+continuity3[continuity3$team == "NJN", 2] <- "BRK"
+continuity3[continuity3$team == "CHA", 2] <- "CHO"
+continuity3[continuity3$team == "NOH", 2] <- "NOP"
+
+continuity3$Season <- gsub("-.*","", continuity3$Season)
+continuity3$Season <- as.numeric(continuity3$Season)
+continuity3$Season <- continuity3$Season + 1
+
+cont <- full_join(continuity3,ratings, by = c("team" = "Tm.x", "Season" = "Year"))
+cont <- cont %>% arrange(team, Season)
+```
+
+```{r}
+cont_rolling <- cont %>% 
+  group_by(team) %>% 
+  arrange(Season) %>% 
+  mutate(roll_cont3 = rollapply(data = continuity, width = 3, FUN = mean, fill = NA, align = "right"))
+```
+
+```{r}
+p <- cont_rolling %>% 
+  ggplot(aes(x=roll_cont3, y=NRtg.A))+
+  xlab("Roster Continuity")+
+  ylab("Adjusted Net Rating")+
+  geom_point(aes(color=team))+
+  geom_line(aes(group=team), stat="smooth", method="lm", size=1.2, formula = y~x, color="gray", alpha=0.5)+
+  geom_smooth(aes(group=team), method = "lm", size=0, formula = y~x, color = "gray", alpha=0.2)+
+  theme_tufte()+
+  scale_colour_manual(values=color_scheme$NBA_colors)+
+  theme(legend.position="none", panel.grid = element_blank(), legend.title=element_blank(), text=element_text(family="Roboto Condensed", colour="black"))+
+  facet_wrap(~team)
+p
+ggsave("team_cont_scatter.tiff", p, width = 8, height = 8)
+```
+
+```{r}
+cont_rolling <- cont_rolling %>% 
+  group_by(team) %>% 
+  arrange(Season) %>% 
+  mutate(roll_cont5 = rollapply(data = continuity, width = 5, FUN = mean, fill = NA, align = "right"))
+
+cont_rolling <- cont_rolling %>% 
+  group_by(Season) %>% 
+  mutate(league_mean_rc5 = mean(roll_cont5, na.rm = T))
+
+cont_rolling <- cont_rolling %>% 
+  group_by(Season) %>% 
+  mutate(league_mean_rc3 = mean(roll_cont3, na.rm = T))
+
+cont_rolling <- cont_rolling %>% 
+  group_by(Season) %>% 
+  mutate(league_mean_cont = mean(continuity, na.rm = T))
+
+```
+
+```{r}
+p <- cont_rolling %>%
+  ggplot(aes(x=Season, y=roll_cont5))+
+  ylab("Roster Continuity (light gray is league average)")+
+  geom_line(aes(group=team, color=team))+
+  geom_line(aes(x=Season, y=league_mean_rc5), linetype=1, alpha=0.1)+
+  theme_tufte()+
+  scale_colour_manual(values=color_scheme$NBA_colors)+
+  theme(legend.position="none", panel.grid = element_blank(), legend.title=element_blank(), text=element_text(family="Roboto Condensed", colour="black"))+
+  facet_wrap(~team) 
+p
+ggsave("team_rc5_time_all.tiff", p, width = 8, height = 8)
+
+```
+
+```{r}
+p <- cont_rolling %>%
+  filter(Season > 1999) %>% 
+  ggplot(aes(x=Season, y=roll_cont5))+
+  ylab("Roster Continuity (light gray is league average)")+
+  geom_line(aes(group=team, color=team))+
+  geom_line(aes(x=Season, y=league_mean_rc5), linetype=1, alpha=0.1)+
+  theme_tufte()+
+  scale_colour_manual(values=color_scheme$NBA_colors)+
+  theme(legend.position="none", panel.grid = element_blank(), legend.title=element_blank(), text=element_text(family="Roboto Condensed", colour="black"))+
+  facet_wrap(~team) 
+p
+ggsave("team_rc5_time_modern.tiff", p, width = 8, height = 8)
+
+```
+
+```{r}
+p <- cont_rolling %>% 
+  ggplot(aes(x=Season, y=league_mean_rc5))+
+  theme_tufte()+
+  theme(legend.position="none", panel.grid = element_blank(), legend.title=element_blank(), text=element_text(family="Roboto Condensed", colour="black"))+
+  ylab("League Average Roster Continuity")+
+  scale_x_continuous(breaks=c(1976, 1983, 1995, 1999, 2011))+
+  geom_line()+
+  #geom_vline(xintercept = 1972, lty=2)+ 
+  geom_vline(xintercept = 1976, lty=2)+ # merger and limited free agency
+  annotate("text", x=1974, y=66, label="Merger/Limited FA", angle=90, alpha=0.5)+
+  #geom_vline(xintercept = 1980, lty=2)+ # eliminated no-trade clauses
+  geom_vline(xintercept = 1983, lty=2)+ # added salary cap and Bird Rights
+  annotate("text", x=1981, y=65, label="Cap/Bird Rights", angle=90, alpha=0.5)+
+  #geom_vline(xintercept = 1988, lty=2)+ # added unrestricted free agency
+  geom_vline(xintercept = 1995, lty=2)+ # added rookie scale contracts
+  annotate("text", x=1993, y=66, label="Rookie Scale Contracts", angle=90, alpha=0.5)+
+  geom_vline(xintercept = 1999, lty=2)+ # added max salaries, mid-level exception, escrow and luxury tax 
+  annotate("text", x=2001, y=73, label="Max Sal, Mid-Level Exc, Escrow/Lux", angle=90, alpha=0.5)+
+  #geom_vline(xintercept = 2005, lty=2)+ # luxury tax in effect every season, reductions in contract lengths and raises
+  geom_vline(xintercept = 2011, lty=2)+ # reductions in contract lengths and raises, greater penalties for taxpaying teams
+  annotate("text", x=2009, y=74, label="+ Penalties for Taxpaying Teams", angle=90, alpha=0.5)
+p
+ggsave("league_rc5_annotated.tiff", plot = p, width = 8, height = 5)
+```
+

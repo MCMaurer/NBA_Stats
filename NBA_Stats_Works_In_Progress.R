@@ -9,6 +9,8 @@ require(ggthemes)
 
 # I should probably break this up into a few functions so I don't have to use global assignments
 load_NBA_data <- function(){
+  require(rvest)
+  require(tidyverse)
   # this function loads individual and team data from basketball reference, tidies it, and saves it to global env
 url <- 'https://www.basketball-reference.com/leagues/NBA_2018_totals.html'
 css_page <- '#totals_stats'
@@ -42,8 +44,11 @@ css_page <- "#ratings"
 team_ratings <- url %>% 
   read_html %>%
   html_nodes(css_page) %>% 
-  html_table(header = T) %>% 
-  data.frame() %>% 
+  html_table() %>% 
+  data.frame()
+colnames(team_ratings) <- team_ratings[1,]
+team_ratings <- team_ratings[-1,]
+team_ratings <- team_ratings %>% 
   as_tibble() %>% 
   arrange(Team)
 
@@ -61,12 +66,21 @@ team_cols <- c(1,5,6:15)
 team_ratings[,team_cols] <- team_ratings[,team_cols] %>% 
   lapply(function(x) as.numeric(x))
 
-# save the data to global env for use
-player_data <<- player_data
-team_ratings <<- team_ratings
+# save the data, make sure they're both tibbles (for whatever reason, without this, team_ratings would appear as a dataframe when calling this function)
+data <- NULL
+data$player_data <- as_tibble(player_data)
+data$team_ratings <- as_tibble(team_ratings)
+return(data)
 }
 
-load_NBA_data()
+nba_data <- load_NBA_data()
+
+nba_data$player_data
+nba_data$team_ratings
+
+# let's just assign separate objects
+player_data <- nba_data$player_data
+team_ratings <- nba_data$team_ratings
 
 d2 <- player_data %>%
   group_by(Tm.x) %>% 

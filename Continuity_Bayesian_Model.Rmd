@@ -1,0 +1,241 @@
+---
+title: "NBA Continuity Analysis"
+author: "Michael Culshaw-Maurer"
+date: "February 16, 2018"
+output: html_document
+---
+
+```{r}
+library(rethinking)
+library(MASS)
+require(rvest)
+require(tidyverse)
+require(ggrepel)
+require(ggthemes)
+require(zoo)
+```
+
+Setting up some functions, web-scraping some of the data
+```{r, cache=T}
+# web-scraping data on roster continuity
+url <- 'https://www.basketball-reference.com/friv/continuity.html'
+css_page <- '#continuity'
+continuity <- url %>%
+  read_html %>%
+  html_nodes(css_page) %>%
+  html_table(header = T, fill = T) %>%
+  data.frame() %>%
+  as_tibble()
+
+highlight_teams <- function(team_list, alpha_others){
+  # this function will take a list of teams and an alpha value (pick a low value), and return a table with all teams, their colors, and low alpha values for all teams not on your list
+  NBA_colors <- c("#E03A3E", "#008248", "black", "#CE1141", "#1D1160", "#6F2633", "#007DC5", "#5091CD", "#ED174C", "#FFCD34", "#CE1141", "#002D62", "#ED174C", "#552583", "#00285E", "#98002E", "#00471B", "#7AC143", "#002B5C", "#F58426", "#007AC1", "#0B77BD", "#006BB6", "#1D1160", "#E13A3E", "#5A2D81", "#C4CED4", "#CD1141", "#0C2340", "#002B5C")
+  alpha_values <- rep(alpha_others,30)
+  team_names <- c("ATL", "BOS", "BRK", "CHI", "CHO", "CLE", "DAL", "DEN", "DET", "GSW", "HOU", "IND", "LAC", "LAL", "MEM", "MIA", "MIL", "MIN", "NOP", "NYK", "OKC", "ORL", "PHI", "PHO", "POR", "SAC", "SAS", "TOR", "UTA", "WAS")
+  
+  color_scheme <- as_tibble(cbind(team_names,NBA_colors,alpha_values))
+  color_scheme$alpha_values <- as.numeric(color_scheme$alpha_values)
+  color_scheme[color_scheme$team_names %in% team_list,3] <- 1
+  color_scheme <- as_tibble(color_scheme)
+  return(color_scheme)
+}
+team_list <- NULL
+color_scheme <- highlight_teams(team_list = team_list, 1)
+
+```
+
+
+```{r}
+## need to grep out the % symbol and fill in blanks with NAs
+continuity2 <- continuity
+continuity2[,-1] <- as.numeric(gsub("\\%","",as.matrix(continuity2[,-1])))
+continuity3 <- gather(continuity2, "team", "continuity", 2:31)
+```
+
+
+```{r}
+ratings <- read_csv("AllYearsTeamRatings.csv")
+team_names <- read_csv("team_names_abbreviations.csv")
+ratings$Tm.x <- team_names$Tm.x[match(ratings$Team, team_names$Team)]
+```
+
+Cleaning everything up
+```{r}
+ratings[ratings$Team == "New Jersey Nets", 17] <- "BRK"
+ratings[ratings$Team == "New Orleans Hornets", 17] <- "NOP"
+ratings[ratings$Team == "Charlotte Bobcats", 17] <- "CHO"
+ratings[ratings$Team == "Seattle SuperSonics", 17] <- "OKC"
+ratings[ratings$Team == "Washington Bullets", 17] <- "WAS"
+ratings[ratings$Team == "Vancouver Grizzlies", 17] <- "MEM"
+ratings[ratings$Team == "New Orleans/Oklahoma City Hornets", 17] <- "NOP"
+
+continuity3[continuity3$team == "NJN", 2] <- "BRK"
+continuity3[continuity3$team == "CHA", 2] <- "CHO"
+continuity3[continuity3$team == "NOH", 2] <- "NOP"
+
+continuity3$Season <- gsub("-.*","", continuity3$Season)
+continuity3$Season <- as.numeric(continuity3$Season)
+continuity3$Season <- continuity3$Season + 1
+
+cont <- full_join(continuity3,ratings, by = c("team" = "Tm.x", "Season" = "Year"))
+```
+
+
+```{r}
+cont %>%
+  group_by(team) %>% 
+  #summarise(mean_cont = mean(cont)) %>% 
+  ggplot(aes(x=team, y=continuity))+
+  geom_violin(aes(fill=team))+
+  coord_flip()+
+  theme_tufte()+
+  theme(legend.position="none", text=element_text(family="sans", colour="black"))+
+  scale_fill_manual(values=color_scheme$NBA_colors)
+
+cont %>%
+  ggplot(aes(x=Season, y=continuity))+
+  geom_line(aes(group=team, color=team))+
+  theme_tufte()+
+  theme(legend.position="none", text=element_text(family="sans", colour="black"))+
+  scale_colour_manual(values=color_scheme$NBA_colors)+
+  facet_wrap(~team)
+```
+
+```{r}
+cont_rolling <- cont %>% 
+  group_by(team) %>% 
+  arrange(Season) %>% 
+  mutate(roll_cont = rollapply(data = continuity, width = 3, FUN = mean, fill = NA, align = "right"))
+```
+
+```{r}
+cont_rolling %>%
+  ggplot(aes(x=Season, y=roll_cont))+
+  geom_line(aes(group=team, color=team))+
+  theme_tufte()+
+  theme(legend.position="none", text=element_text(family="sans", colour="black"))+
+  scale_colour_manual(values=color_scheme$NBA_colors)+
+  facet_wrap(~team)
+```
+
+```{r}
+p <- cont_rolling %>%
+  ggplot(aes(x=Season, y=roll_cont))+
+  geom_line(aes(group=team, color=team))+
+  theme_tufte()+
+  scale_colour_manual(values=color_scheme$NBA_colors)+
+theme(legend.position="right", panel.grid = element_blank(), legend.title=element_blank(), text=element_text(family="Roboto Condensed", colour="black"))
+ggplotly(p)
+```
+
+
+
+```{r}
+d <- cont
+```
+
+```{r, cache=TRUE}
+ m1 <- map2stan( 
+      alist(
+          height ~ dnorm( mu , sigma ) ,
+          mu <- a[Subject] + bA[Subject]*age,
+          c(a,bA)[Subject] ~ dmvnorm2(c(A,B), sigma_Subject, Rho),
+          A ~ dnorm(0,1),
+          B ~ dnorm(0,1),
+          sigma_Subject ~ dcauchy(0,2),
+          Rho ~ dlkjcorr(2),
+          sigma ~ dcauchy(0,1)
+          ),
+  
+data=d,
+warmup=1000 , iter=5000, chains=2, cores=2)
+```
+
+**(a)**
+
+```{r}
+precis(m6, depth=2)
+post6 <- extract.samples(m6)
+dens(post6$a)
+dens(post6$bA)
+```
+
+
+```{r}
+dens( post6$sigma_Subject)
+```
+
+This bimodal distribution of sigma shows that there is a lot more variance in the sigma for intercept, which is the peak around 140, whereas the sigma for slope is much lower and peaked.
+
+
+
+**(b)**
+
+```{r}
+
+a1 <- apply( post6$a , 2 , mean )
+b1 <- apply( post6$bA , 2 , mean )
+# plot both and connect with lines
+plot( a1 , b1 , xlab="intercept" , ylab="slope" ,
+    pch=16 , col=rangi2 , ylim=c( min(b1)-0.1 , max(b1)+0.1 ) ,
+    xlim=c( min(a1)-0.1 , max(a1)+0.1 ) )
+points( a1 , b1 , pch=1 )
+```
+
+There is generally a positive correlation here: if you are taller, your slope, or expected growth rate over the next year, is also higher. For a new group of boys, this would tell you that you would predict the ALREADY tall boys will also grow more quickly per year.
+
+
+
+**(c)**
+
+```{r}
+mean.a <- mean(post6$a)
+mean.bA <- mean(post6$bA)
+sd.a <- sd(post6$a)
+sd.bA <- sd(post6$bA)
+Rho.6 <- mean(post6$Rho)
+
+S2 <- matrix( c(sd.a^2, sd.a*sd.bA*Rho.6, sd.a*sd.bA*Rho.6, sd.bA^2), nrow=2)
+```
+
+```{r}
+newBOIS <- mvrnorm(n=10, c(mean.a, mean.bA), S2)
+```
+
+
+
+Let's plot the new boys on the same plot as in 2b, along with the old boys.
+
+```{r}
+
+a1 <- apply( post6$a , 2 , mean )
+b1 <- apply( post6$bA , 2 , mean )
+# plot both and connect with lines
+plot( a1 , b1 , xlab="intercept" , ylab="slope" ,
+    pch=16 , col=rangi2 , ylim=c( min(b1)-0.1 , max(b1)+0.1 ) ,
+    xlim=c( min(a1)-0.1 , max(a1)+0.1 ) )
+points( a1 , b1 , pch=1 )
+points(newBOIS, col = "black" )
+```
+
+Looks like the new boys fit in nicely!
+
+Let's plot them as trends:  
+
+```{r}
+newBOIS <- as.data.frame(newBOIS)
+starting_height <- (newBOIS$V1)
+ending_height <- (newBOIS$V1 + newBOIS$V2)
+starting_age <- c(0,0,0,0,0,0,0,0,0,0)
+ending_age <- c(1,1,1,1,1,1,1,1,1,1)
+
+par(mfrow=c(1, 1))
+#Plotting the simulated boys
+plot( starting_age , starting_height , xlab="age" , ylab="height" ,
+pch=16 , col=rangi2 , xlim=c(0,1)
+, ylim=c( 120,180 ))
+points( ending_age , ending_height , pch=1 )
+for ( i in 1:10 ) lines( c(starting_age[i],ending_age[i]) , c(starting_height[i],ending_height[i]) )
+```
+
+Yeah, this seems to really confirm the idea that starting height has much more affect on future variance than slope does.

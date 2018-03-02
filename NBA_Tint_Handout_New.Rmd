@@ -16,10 +16,10 @@ require(ggrepel)
 require(ggthemes)
 require(zoo)
 require(extrafont)
-require(plotly)
+require(animation)
 require(gganimate)
 loadfonts()
-font_import(paths = NULL, recursive = TRUE, prompt = TRUE, pattern = NULL)
+#font_import(paths = NULL, recursive = TRUE, prompt = TRUE, pattern = NULL)
 # invalidate cache when the package version changes
 knitr::opts_chunk$set(tidy = FALSE, cache.extra = packageVersion('tint'))
 options(htmltools.dir.version = FALSE)
@@ -28,6 +28,8 @@ options(htmltools.dir.version = FALSE)
 
 ```{r, echo=FALSE, cache=TRUE}
 load_NBA_data <- function(){
+  require(rvest)
+  require(tidyverse)
   # this function loads individual and team data from basketball reference, tidies it, and saves it to global env
 url <- 'https://www.basketball-reference.com/leagues/NBA_2018_totals.html'
 css_page <- '#totals_stats'
@@ -61,8 +63,11 @@ css_page <- "#ratings"
 team_ratings <- url %>% 
   read_html %>%
   html_nodes(css_page) %>% 
-  html_table(header = T) %>% 
-  data.frame() %>% 
+  html_table() %>% 
+  data.frame()
+colnames(team_ratings) <- team_ratings[1,]
+team_ratings <- team_ratings[-1,]
+team_ratings <- team_ratings %>% 
   as_tibble() %>% 
   arrange(Team)
 
@@ -80,11 +85,12 @@ team_cols <- c(1,5,6:15)
 team_ratings[,team_cols] <- team_ratings[,team_cols] %>% 
   lapply(function(x) as.numeric(x))
 
-# save the data to global env for use
-player_data <<- player_data
-team_ratings <<- team_ratings
+# save the data, make sure they're both tibbles (for whatever reason, without this, team_ratings would appear as a dataframe when calling this function)
+data <- NULL
+data$player_data <- as_tibble(player_data)
+data$team_ratings <- as_tibble(team_ratings)
+return(data)
 }
-load_NBA_data()
 highlight_teams <- function(team_list, alpha_others){
   # this function will take a list of teams and an alpha value (pick a low value), and return a table with all teams, their colors, and low alpha values for all teams not on your list
   NBA_colors <- c("#E03A3E", "#008248", "black", "#CE1141", "#1D1160", "#6F2633", "#007DC5", "#5091CD", "#ED174C", "#FFCD34", "#CE1141", "#002D62", "#ED174C", "#552583", "#00285E", "#98002E", "#00471B", "#7AC143", "#002B5C", "#F58426", "#007AC1", "#0B77BD", "#006BB6", "#1D1160", "#E13A3E", "#5A2D81", "#C4CED4", "#CD1141", "#0C2340", "#002B5C")
@@ -105,6 +111,14 @@ label_teams <- function(data, team_list, selector_variable, sel_var_value){
 }
 ```
 
+```{r, echo=F}
+nba_data <- load_NBA_data()
+
+# let's just assign separate objects
+player_data <- nba_data$player_data
+team_ratings <- nba_data$team_ratings
+```
+
 
 # Introduction
 
@@ -116,7 +130,7 @@ It's hard to keep up with data analysis, data viz, and coding skills in a consis
 ![thibs](https://media1.giphy.com/media/bcAX66WTkZMyc/giphy-downsized.gif?cid=e1bb72ff5a4e762b32546d592ed2a164)<br>
 ```
 
-As a native Minnesotan, I'm required to be a Wolves fan, though I fully understand the inevitable heartache and loss that Minnesota sports will bring me. A prominent narrative surrounding the Wolves this year has been the heavy minutes laid on their top 5 and the toll it's been taking on the players. Just looking at minutes played this season, 3 of the top 5 players are from Minnesota.
+As a native Minnesotan, I'm required to be a Wolves fan, though I fully understand the inevitable heartache and loss that Minnesota sports will bring me. A prominent narrative surrounding the Wolves this year has been the heavy minutes laid on their top 5 and the toll it's been taking on the players. Just looking at minutes played this season, 3 of the top 4 players are from Minnesota.
 
 ```{r plot, fig.margin=T, echo=F}
 table <- player_data %>% 
@@ -170,8 +184,8 @@ p <- d4 %>%
   scale_colour_manual(values=color_scheme$NBA_colors)
 ```
 
-```{r, echo=F, fig.fullwidth=T, fig.width=10, fig.height=6}
-ggplotly(p, session="knitr", tooltip = "text")
+```{r, echo=F, fig.fullwidth=T, fig.width=10, fig.height=6, message=F}
+plotly::ggplotly(p, session="knitr", tooltip = "text")
 ```
 <br>
 <br>
@@ -210,7 +224,7 @@ p <- d4 %>%
 ```
 
 ```{r, include=F}
-gganimate(p, title_frame = F, filename = "MIN_BRK_comparison.gif", interval=2)
+gganimate::gganimate(p, title_frame = F, filename = "MIN_BRK_comparison.gif", interval=2)
 ```
 
 
@@ -228,7 +242,7 @@ BRK is the opposite, with their top 5 making up  50% of their total minutes and 
 I noticed there was one team that wasn't too far off from the Wolves in several aspects of their distributions.
 <br>
 ```{r, echo=F}
-team_list <- c("MIN", "BRK", "GSW", "IND")
+team_list <- c("MIN", "LAC", "GSW", "IND")
 color_scheme <- highlight_teams(team_list = team_list, 0.05)
 d4 <- label_teams(data=d4, team_list = team_list, selector_variable = d4$rank, sel_var_value = 5)
 
@@ -247,6 +261,7 @@ p <- d4 %>%
 
 ```{r, echo=F, fig.width=10, fig.height=6, warning=FALSE, }
 p
+#ggsave("~/Documents/nba_plot.jpeg", device = "jpeg", height = 7, width = 10)
 ```
 
 Now, I haven't seen any discussion of the Pacers as another small-rotation team, but the Pacers actually match the Wolves if you look at the contributions by their top 8 guys. The Pacers are certainly distributing minutes more evenly among these guys, but they're still well above most of the league at this point.
@@ -260,8 +275,8 @@ Let's take a look at the top 3 teams from each division.
 ```{r, echo=F}
 team_list <- team_ratings %>% 
   group_by(Conf) %>% 
-  arrange(desc(W.L.)) %>% 
-  mutate(rank = rank(-W.L., ties.method = "random")) %>% 
+  arrange(desc(`W/L%`)) %>% 
+  mutate(rank = rank(-`W/L%`, ties.method = "random")) %>% 
   ungroup() %>% 
   filter(rank <= 3) %>% 
   select(Tm.x) %>% 
@@ -321,7 +336,7 @@ p <- d4 %>%
 ```
 
 ```{r, include=F}
-gganimate(p, title_frame = F, filename = "Houston_comparison.gif", interval=2)
+gganimate::gganimate(p, title_frame = F, filename = "Houston_comparison.gif", interval=2)
 ```
 
 ```{marginfigure}
@@ -331,7 +346,7 @@ gganimate(p, title_frame = F, filename = "Houston_comparison.gif", interval=2)
 <br>
 <br>
 ```{marginfigure}
-![james+harden](https://media2.giphy.com/media/XPMCrKFznOBQk/giphy-downsized.gif?cid=e1bb72ff5a4e74312e6b63634d3f696b)<br>
+![james+harden](https://media2.giphy.com/media/XPMCrKFznOBQk/giphy-downsized.gif?cid=e1bb72ff5a4e74312e6b63634d3f696b)<br> Ok, fine, not in every way...
 ```
 
 We all know Golden State doesn't care about the regular season and it shows here. They get significant contributions from a bunch of bench guys while their starters play fairly typical minutes. The Spurs play their starters even less and have a pretty significant bench to boot.
@@ -344,5 +359,7 @@ Yeah.
 
 But let's dig into a more specific question that often comes up regarding the Spurs: does a stable roster correlate with team success?
 
+# Let's think about Beta Diversity in NBA Stats
 
+More generally, can we leverage ecological methods for NBA data analysis? Is there beta diversity between teams? What kind of ecological sampling methods can we apply to NBA data? What are similarities between ecological techniques and others and how can we map them/make them more broadly approachable?
 

@@ -3,6 +3,7 @@ require(tidyverse)
 require(ggrepel)
 require(ggthemes)
 require(zoo)
+require(skimr)
 
 # web-scraping data on roster continuity
 url <- 'https://www.basketball-reference.com/friv/continuity.html'
@@ -26,6 +27,8 @@ highlight_teams <- function(team_list, alpha_others){
   color_scheme <- as_tibble(color_scheme)
   return(color_scheme)
 }
+
+team_list <- c()
 
 color_scheme <- highlight_teams(team_list = team_list, 1)
 
@@ -89,12 +92,12 @@ continuity3 %>%
 # 
 # write_csv(ratings, "GitHub/NBA_Stats/AllYearsTeamRatings.csv")
 
-ratings <- read_csv("GitHub/NBA_Stats/AllYearsTeamRatings.csv")
+ratings <- read_csv("AllYearsTeamRatings.csv")
 
 # ok rad, now I have all the ratings data in here, I just need to clean it up, create a new column with team name abbreviations on it. This will probably mean grepping through a whole list of names, but I might be able to quicken it by making vectors of matching team names and abbreviations. Then basically if continuity$Name == "d$Name[1]", continuity$Abbreviation <- d$Abbreviation[1]. Then I'll clean that up going and looking at any teams that don't exist any more and doing those by hand
   # on this note, I may be able to grab the combinations of team name and abbreviation from one of the team_data sets from the random_NBA_stats_stuff
 
-team_names <- read_csv("GitHub/NBA_Stats/team_names_abbreviations.csv")
+team_names <- read_csv("team_names_abbreviations.csv")
 
 # ratings$Tm.x <- NA
 # 
@@ -222,7 +225,7 @@ cont_rolling %>%
 fit2 <- lm(NRtg.A~continuity + roll_cont, data=cont_rolling)
 summary(fit2)
 
-
+library(plotly)
 # interactive plot
 color_scheme <- highlight_teams(team_list = "", 1)
 ggplotly(
@@ -262,7 +265,7 @@ ggplotly(
 )
 
 
-
+cont_rolling <- as.data.frame(cont_rolling)
 cont_rolling$Decade[cont_rolling$Season %in% 1980:1989] <- 1980
 cont_rolling$Decade[cont_rolling$Season %in% 1990:1999] <- 1990
 cont_rolling$Decade[cont_rolling$Season %in% 2000:2009] <- 2000
@@ -276,7 +279,7 @@ ggplotly(
     theme_tufte()+
     theme(legend.position="none", text=element_text(family="sans", colour="black"))+
     scale_colour_manual(values=color_scheme$NBA_colors)+
-    # facet_wrap(~Decade)+
+    facet_wrap(~Decade)+
     geom_smooth(method = "lm", formula = y~x, color = "gray", alpha=0.2)
 )
 
@@ -299,7 +302,7 @@ cont %>%
   geom_smooth(method = "lm", formula = y~x, color = "gray")
 
 # animated plot time
-devtools::install_github("dgrtwo/gganimate")
+#devtools::install_github("dgrtwo/gganimate")
 require(gganimate)
 
 p <- cont_rolling %>% 
@@ -314,3 +317,153 @@ gganimate(p)
 
 fit3 <- lm(continuity~PreviousNRtg.A, data=cont)
 summary(fit3)
+
+fit4 <- lm(NRtg.A~roll_cont + team:roll_cont, data=cont_rolling)
+summary(fit4)
+plot(fit4, which = c(1:6))
+
+
+p <- cont_rolling %>%
+  ggplot(aes(x=Season, y=roll_cont))+
+  geom_line(aes(group=team, color=team))+
+  theme_tufte()+
+  scale_colour_manual(values=color_scheme$NBA_colors)+
+  theme(legend.position="right", panel.grid = element_blank(), legend.title=element_blank(), text=element_text(family="Roboto Condensed", colour="black"))
+ggplotly(p)
+
+
+cont_rolling %>%
+  ggplot(aes(x=Season, y=roll_cont))+
+  geom_line(aes(group=team, color=team))+
+  theme_tufte()+
+  scale_colour_manual(values=color_scheme$NBA_colors)+
+  theme(legend.position="none", panel.grid = element_blank(), legend.title=element_blank(), text=element_text(family="Roboto Condensed", colour="black"))+
+  facet_wrap(~team)
+
+
+# scatter plot for each team with 3-year rolling average cont
+p <- cont_rolling %>% 
+  ggplot(aes(x=roll_cont, y=NRtg.A))+
+  xlab("Roster Continuity")+
+  ylab("Adjusted Net Rating")+
+  geom_point(aes(color=team))+
+  geom_line(aes(group=team), stat="smooth", method="lm", size=1.2, formula = y~x, color="gray", alpha=0.5)+
+  geom_smooth(aes(group=team), method = "lm", size=0, formula = y~x, color = "gray", alpha=0.2)+
+  theme_tufte()+
+  scale_colour_manual(values=color_scheme$NBA_colors)+
+  theme(legend.position="none", panel.grid = element_blank(), legend.title=element_blank(), text=element_text(family="Roboto Condensed", colour="black"))+
+  facet_wrap(~team)
+ggsave("team_cont_scatter.tiff", p, width = 8, height = 8)
+
+# let's calculate a 5-year rolling average
+cont_rolling <- cont_rolling %>% 
+  group_by(team) %>% 
+  arrange(Season) %>% 
+  mutate(roll_cont5 = rollapply(data = continuity, width = 5, FUN = mean, fill = NA, align = "right"))
+
+cont_rolling <- cont_rolling %>% 
+  group_by(Season) %>% 
+  mutate(league_mean_rc5 = mean(roll_cont5, na.rm = T))
+
+league_average_roll5 <- mean(cont_rolling$roll_cont5, na.rm = T)
+
+# now plotting the 5-year-rolling
+cont_rolling %>% 
+  ggplot(aes(x=roll_cont5, y=NRtg.A))+
+  geom_point(aes(color=team))+
+  geom_smooth(aes(group=team), method = "lm", formula = y~x, color = "gray", alpha=0.2)+
+  theme_tufte()+
+  scale_colour_manual(values=color_scheme$NBA_colors)+
+  theme(legend.position="none", panel.grid = element_blank(), legend.title=element_blank(), text=element_text(family="Roboto Condensed", colour="black"))+
+  facet_wrap(~team)
+
+# let's look at 5 year rolling across time, plotting the all-time league average as well
+# cont_rolling %>%
+#   ggplot(aes(x=Season, y=roll_cont5))+
+#   geom_line(aes(group=team, color=team))+
+#   geom_hline(yintercept = league_average_roll5, linetype=2)+
+#   geom_hline(yintercept = mean(roll_cont5), linetype=2)+
+#   theme_tufte()+
+#   scale_colour_manual(values=color_scheme$NBA_colors)+
+#   theme(legend.position="none", panel.grid = element_blank(), legend.title=element_blank(), text=element_text(family="Roboto Condensed", colour="black"))+
+#   facet_wrap(~team)
+
+# let's look at 5 year rolling across time, but plotting the league average across years too
+p <- cont_rolling %>%
+  ggplot(aes(x=Season, y=roll_cont5))+
+  ylab("Roster Continuity (light gray is league average)")+
+  geom_line(aes(color=team))+
+  geom_line(aes(x=Season, y=league_mean_rc5), linetype=1, alpha=0.1)+
+  theme_tufte()+
+  scale_colour_manual(values=color_scheme$NBA_colors)+
+  theme(legend.position="none", panel.grid = element_blank(), legend.title=element_blank(), text=element_text(family="Roboto Condensed", colour="black"))+
+  facet_wrap(~team) 
+p
+ggsave("team_rc5_time_all.tiff", p, width = 8, height = 8)
+
+
+p1 <- ggplot_build(p)
+ggplot_gtable(p1)
+
+# zoom in on modern era
+p <- cont_rolling %>%
+  filter(Season > 1999) %>% 
+  ggplot(aes(x=Season, y=roll_cont5))+
+  ylab("Roster Continuity (light gray is league average)")+
+  geom_line(aes(group=team, color=team))+
+  geom_line(aes(x=Season, y=league_mean_rc5), linetype=1, alpha=0.1)+
+  theme_tufte()+
+  scale_colour_manual(values=color_scheme$NBA_colors)+
+  theme(legend.position="none", panel.grid = element_blank(), legend.title=element_blank(), text=element_text(family="Roboto Condensed", colour="black"))+
+  facet_wrap(~team) 
+p
+ggsave("team_rc5_time_modern.tiff", p, width = 8, height = 8)
+
+p <- cont_rolling %>% 
+  ggplot(aes(x=Season, y=league_mean_rc5))+
+  ylab("League Average Roster Continuity")+
+  scale_x_continuous(breaks=c(1976, 1983, 1995, 1999, 2011))+
+  geom_line()+
+  #geom_vline(xintercept = 1972, lty=2)+ 
+  geom_vline(xintercept = 1976, lty=2)+ # merger and limited free agency
+  annotate("text", x=1974, y=66, label="Merger/Limited FA", angle=90, alpha=0.5)+
+  #geom_vline(xintercept = 1980, lty=2)+ # eliminated no-trade clauses
+  geom_vline(xintercept = 1983, lty=2)+ # added salary cap and Bird Rights
+  annotate("text", x=1981, y=65, label="Cap/Bird Rights", angle=90, alpha=0.5)+
+  #geom_vline(xintercept = 1988, lty=2)+ # added unrestricted free agency
+  geom_vline(xintercept = 1995, lty=2)+ # added rookie scale contracts
+  annotate("text", x=1993, y=66, label="Rookie Scale Contracts", angle=90, alpha=0.5)+
+  geom_vline(xintercept = 1999, lty=2)+ # added max salaries, mid-level exception, escrow and luxury tax 
+  annotate("text", x=2001, y=73, label="Max Sal, Mid-Level Exc, Escrow/Lux", angle=90, alpha=0.5)+
+  #geom_vline(xintercept = 2005, lty=2)+ # luxury tax in effect every season, reductions in contract lengths and raises
+  geom_vline(xintercept = 2011, lty=2)+ # reductions in contract lengths and raises, greater penalties for taxpaying teams
+  annotate("text", x=2009, y=74, label="+ Penalties for Taxpaying Teams", angle=90, alpha=0.5)
+p
+ggsave("league_rc5_annotated.tiff", plot = p, width = 8, height = 5)
+
+cont_rolling <- cont_rolling %>% 
+  group_by(Season) %>% 
+  mutate(league_mean_cont = mean(continuity, na.rm = T))
+
+cont_rolling <- cont_rolling %>% 
+  group_by(Season) %>% 
+  mutate(league_mean_rc3 = mean(roll_cont, na.rm = T))
+
+
+p <- cont_rolling %>%
+  filter(Season > 1999) %>% 
+  ggplot(aes(x=Season, y=roll_cont))+
+  ylab("Roster Continuity (light gray is league average)")+
+  geom_line(aes(group=team, color=team))+
+  geom_line(aes(x=Season, y=league_mean_rc3), linetype=1, alpha=0.1)+
+  theme_tufte()+
+  scale_colour_manual(values=color_scheme$NBA_colors)+
+  theme(legend.position="none", panel.grid = element_blank(), legend.title=element_blank(), text=element_text(family="Roboto Condensed", colour="black"))+
+  facet_wrap(~team) 
+p
+
+
+
+#### next big thing ####
+
+# can I directly get the rosters and minutes from every team for every year? And then join them all together, group by team and season and calculate total mins, then give each player a % mins for that season. And then track continuity by player contribution in a given year? Like, the idea that continuity is really a guy giving significant minutes over many years. Because you could achieve an average of 70% continuity by alternating between 100% and 40% every year, which is dumb
